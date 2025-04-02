@@ -11,6 +11,7 @@ CREATE TABLE academy_progress_report (
     store VARCHAR(255),
     progress_percentage DECIMAL(5,2) DEFAULT 0.00,
     completed TINYINT(1) DEFAULT 0,
+    course_completed_at TIMESTAMP NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     -- Add indexes for faster filtering in Looker
     INDEX idx_user_id (user_id),
@@ -99,12 +100,14 @@ SELECT
     course_id,
     COUNT(DISTINCT CASE WHEN activity_type IN ('lesson', 'topic', 'quiz') AND activity_completed > 0 
            THEN activity_id ELSE NULL END) AS completed_items,
-    MAX(CASE WHEN activity_type = 'course' AND activity_completed > 0 THEN 1 ELSE 0 END) AS course_completed
+    MAX(CASE WHEN activity_type = 'course' AND activity_completed > 0 THEN 1 ELSE 0 END) AS course_completed,
+    MAX(CASE WHEN activity_type = 'course' AND activity_completed > 0 
+        THEN FROM_UNIXTIME(activity_completed) ELSE NULL END) AS course_completed_at
 FROM wp_learndash_user_activity
 GROUP BY user_id, course_id;
 
 -- Step 1: Insert data for users enrolled in courses (regular enrollments)
-INSERT INTO academy_progress_report (user_id, user_name, email, course_id, course_name, role, store, progress_percentage, completed)
+INSERT INTO academy_progress_report (user_id, user_name, email, course_id, course_name, role, store, progress_percentage, completed, course_completed_at)
 SELECT 
     vu.user_id,
     vu.user_name,
@@ -119,7 +122,8 @@ SELECT
             LEAST(ROUND(uc.completed_items * 1.0 / ci.total_items, 2), 1.00)  -- Cap at 1.00 (100%)
         ELSE 0.00
     END AS progress_percentage,
-    COALESCE(uc.course_completed, 0) AS completed
+    COALESCE(uc.course_completed, 0) AS completed,
+    uc.course_completed_at
 FROM valid_users vu
 JOIN enrolled_users eu ON vu.user_id = eu.user_id
 JOIN wp_posts c ON c.ID = eu.course_id AND c.post_type = 'sfwd-courses'
@@ -127,7 +131,7 @@ LEFT JOIN course_items ci ON c.ID = ci.course_id
 LEFT JOIN user_completions uc ON vu.user_id = uc.user_id AND c.ID = uc.course_id;
 
 -- Step 2: Insert Core Certification course for all users who don't already have it
-INSERT INTO academy_progress_report (user_id, user_name, email, course_id, course_name, role, store, progress_percentage, completed)
+INSERT INTO academy_progress_report (user_id, user_name, email, course_id, course_name, role, store, progress_percentage, completed, course_completed_at)
 SELECT 
     vu.user_id,
     vu.user_name,
@@ -142,7 +146,8 @@ SELECT
             LEAST(ROUND(uc.completed_items * 1.0 / ci.total_items, 2), 1.00)
         ELSE 0.00
     END AS progress_percentage,
-    COALESCE(uc.course_completed, 0) AS completed
+    COALESCE(uc.course_completed, 0) AS completed,
+    uc.course_completed_at
 FROM valid_users vu
 CROSS JOIN core_cert_course cc
 LEFT JOIN course_items ci ON cc.course_id = ci.course_id
